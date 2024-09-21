@@ -14,7 +14,7 @@ const SCOPES = ['https://www.googleapis.com/auth/forms.body', 'https://www.googl
 const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  'http://localhost:3002/oauth2callback'
+  'https://forms-backend.vercel.app/oauth2callback'
 );
 
 // Load token from environment variables
