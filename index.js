@@ -1,51 +1,61 @@
 const express = require('express');
 const { google } = require('googleapis');
 const bodyParser = require('body-parser');
-const fs = require('fs');
-const path = require('path');
+const cors = require('cors');
 require('dotenv').config();
-const cors =require('cors')
+
 const app = express();
 app.use(bodyParser.json());
+app.use(cors());
 
-app.use(cors())
 const SCOPES = ['https://www.googleapis.com/auth/forms.body', 'https://www.googleapis.com/auth/forms.responses.readonly'];
-const TOKEN_PATH = path.join(__dirname, 'token.json');
 
-
-
-
+// OAuth2 client setup
 const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
   'http://localhost:3002/oauth2callback'
 );
 
-
-function ensureAuthenticated(req, res, next) {
-  if (fs.existsSync(TOKEN_PATH)) {
-    const token = JSON.parse(fs.readFileSync(TOKEN_PATH));
-    oAuth2Client.setCredentials(token);
-    
-    if (token.expiry_date <= Date.now()) {
-      oAuth2Client.refreshAccessToken((err, newTokens) => {
-        if (err) {
-          console.error('Error refreshing access token:', err);
-          return res.redirect('/auth');
-        }
-        fs.writeFileSync(TOKEN_PATH, JSON.stringify(newTokens));
-        oAuth2Client.setCredentials(newTokens);
-        next();
-      });
-    } else {
-      next();
-    }
-  } else {
-    res.redirect('/auth');
+// Load token from environment variables
+function loadToken() {
+  const token = process.env.GOOGLE_TOKEN;
+  if (token) {
+    oAuth2Client.setCredentials(JSON.parse(token));
   }
 }
 
+// Save token to environment variables
+function saveToken(token) {
+  process.env.GOOGLE_TOKEN = JSON.stringify(token);
+}
 
+// Middleware to ensure authentication
+function ensureAuthenticated(req, res, next) {
+  loadToken();
+
+  const token = oAuth2Client.credentials;
+  if (!token) {
+    return res.redirect('/auth');
+  }
+
+  // Check if token has expired
+  if (token.expiry_date <= Date.now()) {
+    oAuth2Client.refreshAccessToken((err, newTokens) => {
+      if (err) {
+        console.error('Error refreshing access token:', err);
+        return res.redirect('/auth');
+      }
+      oAuth2Client.setCredentials(newTokens);
+      saveToken(newTokens);
+      next();
+    });
+  } else {
+    next();
+  }
+}
+
+// Auth route to get user's authorization
 app.get('/auth', (req, res) => {
   const authUrl = oAuth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -54,13 +64,13 @@ app.get('/auth', (req, res) => {
   res.redirect(authUrl);
 });
 
-
+// OAuth2 callback to exchange authorization code for tokens
 app.get('/oauth2callback', async (req, res) => {
   try {
     const { code } = req.query;
     const { tokens } = await oAuth2Client.getToken(code);
     oAuth2Client.setCredentials(tokens);
-    fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens));
+    saveToken(tokens);  // Save token in environment variable
     res.send('Authorization complete! You can now create forms.');
   } catch (error) {
     console.error('Error retrieving access token', error);
@@ -68,22 +78,21 @@ app.get('/oauth2callback', async (req, res) => {
   }
 });
 
+// Form API routes
 const forms = google.forms({ version: 'v1', auth: oAuth2Client });
 
-
+// Route to export form
 app.get('/export-form/:formId', ensureAuthenticated, async (req, res) => {
   const formId = req.params.formId;
-  console.log('Attempting to export form with ID:', formId); 
   try {
     const form = await forms.forms.get({ formId });
     const formData = form.data;
-    fs.writeFileSync(`form-${formId}.json`, JSON.stringify(formData, null, 2));
-    res.send(formData);
+    res.json(formData);
   } catch (error) {
     console.error('Error exporting form:', error.response?.data || error.message);
     res.status(500).send('Error exporting form');
   }
-});
+})
 
 
 app.post('/import-form', ensureAuthenticated, async (req, res) => {
